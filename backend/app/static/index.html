@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BrandProof</title>
+<style>
+:root{--navy:#0B2545;--navy2:#13315C;--bg:#F4F7FB;--card:#fff;--ink:#1B2430;--muted:#6B7685;--line:#E3E8EF;--ok:#1E8E5A;--bad:#C62828;--warn:#B7791F;--rev:#6B46C1;--acc:#2F6FDE}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+.app{display:grid;grid-template-columns:232px 1fr;min-height:100vh}
+aside{background:linear-gradient(180deg,var(--navy),var(--navy2));color:#fff;padding:24px 16px;position:relative}
+.brand{font-weight:700;font-size:18px;letter-spacing:.2px}
+.tagline{opacity:.7;font-size:12px;margin:2px 0 26px}
+nav button{display:block;width:100%;text-align:left;background:none;border:0;color:#cfd9e8;padding:9px 12px;border-radius:8px;cursor:pointer;font:inherit}
+nav button:hover,nav button.on{background:rgba(255,255,255,.12);color:#fff}
+.who{position:absolute;bottom:20px;left:16px;right:16px;font-size:12px;opacity:.85;word-break:break-all}
+main{padding:28px 34px;max-width:1120px;width:100%}
+h1{font-size:22px;margin:0 0 4px}h3{margin:22px 0 10px;font-size:15px}
+.sub{color:var(--muted);margin:0 0 22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px}
+.stat b{display:block;font-size:26px}.stat span{color:var(--muted);font-size:12px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+tr:last-child td{border-bottom:0}
+input,textarea,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff}
+textarea{min-height:150px;resize:vertical}
+label{display:block;font-weight:600;margin:14px 0 6px;font-size:13px}
+button{font:inherit;cursor:pointer;border-radius:8px;padding:9px 16px;border:1px solid var(--line);background:#fff}
+button.p{background:var(--acc);color:#fff;border-color:var(--acc);font-weight:600}
+button.d{background:var(--bad);color:#fff;border-color:var(--bad);font-weight:600}
+button.s{padding:7px 12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center}
+.pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;font-weight:600;color:#fff;background:var(--muted)}
+.pill.supported{background:var(--ok)}.pill.contradicted{background:var(--bad)}
+.pill.unverified{background:var(--warn)}.pill.human_review{background:var(--rev)}
+.finding{border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:10px;padding:16px;margin-bottom:12px;background:#fff}
+.finding.supported{border-left-color:var(--ok)}.finding.contradicted{border-left-color:var(--bad)}
+.finding.unverified{border-left-color:var(--warn)}.finding.human_review{border-left-color:var(--rev)}
+.ev{background:#F7F9FC;border-radius:8px;padding:10px 12px;margin-top:10px;font-size:13px;color:#33404f}
+.fix{background:#EEF6F1;border-radius:8px;padding:10px 12px;margin-top:10px;font-size:13px}
+.muted{color:var(--muted)}
+.err{color:var(--bad)}
+.login{min-height:100vh;display:grid;place-items:center;background:linear-gradient(135deg,var(--navy),var(--navy2))}
+.login .card{width:390px;margin:0;padding:28px}
+#toast{position:fixed;right:20px;bottom:20px;background:var(--navy);color:#fff;padding:12px 18px;border-radius:8px;display:none;box-shadow:0 8px 24px rgba(0,0,0,.2);max-width:360px}
+#toast.show{display:block}
+@media(max-width:800px){.app{grid-template-columns:1fr}main{padding:20px}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="toast"></div>
+<script>
+const $ = s => document.querySelector(s);
+const M = () => $("#main");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const LABEL = {supported:"Supported", contradicted:"Contradicted", unverified:"Unverified", human_review:"Human review"};
+const STATUS = {checked:"Checked", in_review:"In review", revision:"Revision requested", approved:"Approved"};
+const REVIEW_ROLES = ["reviewer", "brand_manager", "compliance"];
+const NAV = {
+  creator: [["check","Check content"],["subs","My submissions"]],
+  reviewer: [["queue","Review queue"]],
+  brand_manager: [["dash","Overview"],["check","Check content"],["subs","All submissions"],["queue","Review queue"],["sources","Sources"],["gaps","Gap detector"],["audit","Audit log"]],
+  compliance: [["dash","Overview"],["subs","All submissions"],["queue","Review queue"],["audit","Audit log"]],
+};
+const S = { token: sessionStorage.getItem("bp_token"), me: null, view: "", arg: null };
+
+async function api(path, opts = {}) {
+  const h = {};
+  if (S.token) h.Authorization = "Bearer " + S.token;
+  let body = opts.body;
+  if (body !== undefined && !(body instanceof FormData)) { h["Content-Type"] = "application/json"; body = JSON.stringify(body); }
+  const r = await fetch(path, { method: opts.method || (body !== undefined ? "POST" : "GET"), headers: h, body });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    let d = data.detail;
+    if (Array.isArray(d)) d = d.map(x => x.msg).join("; ");
+    throw new Error(d || r.statusText);
+  }
+  return data;
+}
+
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3500);
+}
+
+const stat = (v, l) => `<div class="card stat"><b>${esc(v)}</b><span>${esc(l)}</span></div>`;
+
+function table(list) {
+  if (!list.length) return `<p class="muted">Nothing here yet.</p>`;
+  return `<table><tr><th>Title</th><th>Submitted by</th><th>Channel</th><th>Status</th><th>Open findings</th><th></th></tr>
+    ${list.map(s => `<tr><td>${esc(s.title)}</td><td class="muted">${esc(s.creator)}</td><td>${esc(s.channel)}</td>
+    <td>${STATUS[s.status] || esc(s.status)}</td><td>${s.open}</td>
+    <td><button class="s" onclick="go('sub',${s.id})">Open</button></td></tr>`).join("")}</table>`;
+}
+
+const VIEWS = {
+  async dash() {
+    const a = await api("/governance/analytics");
+    M().innerHTML = `<h1>Overview</h1><p class="sub">How content performs against your approved brand rules.</p>
+      <div class="grid">${stat(a.submissions, "Submissions")}${stat(a.approved_rate + "%", "Approved")}
+      ${stat(a.evidence_coverage + "%", "Findings backed by evidence")}${stat(a.open_gaps, "Open rule proposals")}</div>
+      <div class="card" style="margin-top:18px"><h3 style="margin-top:0">Findings by verdict</h3>
+      ${Object.keys(LABEL).map(k => `<p style="margin:6px 0"><span class="pill ${k}">${LABEL[k]}</span>&nbsp; ${a.verdicts[k] || 0}</p>`).join("")}</div>`;
+  },
+  check() {
+    M().innerHTML = `<h1>Check content</h1><p class="sub">Paste a draft. Every finding cites the approved source behind it.</p>
+      <div class="card"><label style="margin-top:0">Title</label><input id="t" placeholder="e.g. Spring launch banner">
+      <label>Channel</label><select id="c"><option>web</option><option>social</option><option>email</option><option>print</option></select>
+      <label>Content</label><textarea id="x" placeholder="Paste your draft here..."></textarea>
+      <div class="row"><button class="p" onclick="submitCheck()">Run brand check</button></div></div>`;
+  },
+  async subs() {
+    const list = await api("/submissions");
+    M().innerHTML = `<h1>${S.me.role === "creator" ? "My submissions" : "All submissions"}</h1>
+      <p class="sub">Every draft checked so far.</p><div class="card">${table(list)}</div>`;
+  },
+  async queue() {
+    const list = (await api("/submissions")).filter(s => s.status === "in_review");
+    M().innerHTML = `<h1>Review queue</h1><p class="sub">Drafts waiting for a human decision.</p><div class="card">${table(list)}</div>`;
+  },
+  async sub() {
+    const s = await api("/submissions/" + S.arg);
+    const owner = s.creator_id === S.me.id;
+    const canReview = REVIEW_ROLES.includes(S.me.role) && !owner && s.status === "in_review";
+    const editable = owner && ["checked", "revision"].includes(s.status);
+    const findings = s.findings.map(f => `
+      <div class="finding ${f.verdict}">
+        <div class="row" style="margin:0 0 8px"><span class="pill ${f.verdict}">${LABEL[f.verdict]}</span>
+          <span class="muted">${esc(f.category)} · ${Math.round(f.confidence * 100)}% confidence · ${esc(f.status)}</span></div>
+        <div><b>"${esc(f.excerpt)}"</b></div>
+        <div style="margin-top:6px">${esc(f.reason)}</div>
+        ${f.suggestion ? `<div class="muted" style="margin-top:4px">Suggestion: ${esc(f.suggestion)}</div>` : ""}
+        ${f.evidence ? `<div class="ev"><b>Approved source: ${esc(f.source_title)}</b><br>${esc(f.evidence)}</div>` : ""}
+        ${f.replacement && f.status === "open" && owner ? `<div class="fix"><b>Suggested rewrite:</b> ${esc(f.replacement)}</div>` : ""}
+        ${owner && f.status === "open" ? `<div class="row">${f.replacement ? `<button class="p s" onclick="accept(${s.id},${f.id})">Accept fix</button>` : ""}
+          <button class="s" onclick="dispute(${s.id},${f.id})">Dispute</button></div>` : ""}
+      </div>`).join("") || `<div class="card muted">No findings. Nothing conflicts with the approved rules.</div>`;
+    M().innerHTML = `
+      <button class="s" onclick="go('${owner ? "subs" : "queue"}')">← Back</button>
+      <h1 style="margin-top:14px">${esc(s.title)}</h1>
+      <p class="sub">${esc(s.channel)} · submitted by ${esc(s.creator)} · <b>${STATUS[s.status]}</b></p>
+      <div class="card"><label style="margin-top:0">Content</label><div style="white-space:pre-wrap">${esc(s.text)}</div>
+        ${editable ? `<label>Edit and re-check</label><textarea id="re">${esc(s.text)}</textarea>
+        <div class="row"><button class="s" onclick="recheck(${s.id})">Re-run check</button>
+        <button class="p" onclick="sendReview(${s.id})">Send for review</button></div>` : ""}</div>
+      <h3>Findings</h3>${findings}
+      ${canReview ? `<div class="card"><label style="margin-top:0">Reviewer note</label><textarea id="note" style="min-height:70px"></textarea>
+        <div class="row"><button class="p" onclick="decide(${s.id},'approve')">Approve</button>
+        <button class="d" onclick="decide(${s.id},'revise')">Request revision</button></div></div>` : ""}
+      <h3>History</h3><div class="card">${s.decisions.map(d => `<p class="muted" style="margin:4px 0">${esc(d.at.slice(0, 16).replace("T", " "))} · ${esc(d.actor)} · <b>${esc(d.action)}</b>${d.note ? " · " + esc(d.note) : ""}</p>`).join("") || "<span class='muted'>No activity yet.</span>"}</div>`;
+  },
+  async sources() {
+    const list = await api("/sources");
+    M().innerHTML = `<h1>Approved sources</h1><p class="sub">Upload brand books, fact sheets, claim evidence and visual guides. Uploading the same title again creates a new version that the checker uses immediately.</p>
+      <div class="card"><div class="grid" style="grid-template-columns:2fr 1fr 2fr">
+        <div><label style="margin-top:0">Title</label><input id="st" placeholder="e.g. Fact Sheet"></div>
+        <div><label style="margin-top:0">Category</label><select id="sc"><option>general</option><option>tone</option><option>claims</option><option>facts</option><option>visual</option></select></div>
+        <div><label style="margin-top:0">File (txt, md, pdf, docx)</label><input id="sf" type="file" accept=".txt,.md,.pdf,.docx"></div></div>
+        <div class="row"><button class="p" onclick="uploadSource()">Upload source</button></div></div>
+      <div class="card">${list.length ? `<table><tr><th>Title</th><th>Category</th><th>Version</th><th>Passages</th><th>File</th></tr>
+        ${list.map(x => `<tr><td>${esc(x.title)}</td><td>${esc(x.category)}</td><td>v${x.version}</td><td>${x.passage_count}</td><td class="muted">${esc(x.filename)}</td></tr>`).join("")}</table>`
+        : `<p class="muted">No approved sources yet.</p>`}</div>`;
+  },
+  async gaps() {
+    const list = await api("/governance/gaps");
+    M().innerHTML = `<h1>Guideline gap detector</h1><p class="sub">Finds rules that people keep disputing or that have no evidence, and drafts a clearer rule. Nothing changes until you approve it.</p>
+      <div class="row" style="margin:0 0 18px"><button class="p" onclick="scanGaps()">Scan review history</button></div>
+      ${list.map(g => `<div class="card"><div class="row" style="margin:0 0 8px">
+        <span class="pill ${g.gap_type === "ambiguous" ? "human_review" : "unverified"}">${esc(g.gap_type)}</span>
+        <span class="muted">${esc(g.rule_key)} · ${g.evidence_count} records · ${esc(g.status)}</span></div>
+        <p style="margin:6px 0">${esc(g.summary)}</p><div class="fix"><b>Proposed rule:</b> ${esc(g.rewrite)}</div>
+        ${g.status === "pending" ? `<div class="row"><button class="p" onclick="decideGap(${g.id},'approve')">Approve rule</button>
+        <button class="s" onclick="decideGap(${g.id},'reject')">Reject</button></div>` : ""}</div>`).join("")
+        || `<div class="card muted">No proposals yet. Scan once enough reviews exist.</div>`}`;
+  },
+  async audit() {
+    const list = await api("/governance/audit");
+    M().innerHTML = `<h1>Audit log</h1><p class="sub">Every submission, review decision and rule change, with who and when.</p>
+      <div class="card"><table><tr><th>When</th><th>Who</th><th>Action</th><th>Detail</th></tr>
+      ${list.map(a => `<tr><td class="muted">${esc(a.at.slice(0, 16).replace("T", " "))}</td><td>${esc(a.actor)}</td><td>${esc(a.action)}</td><td>${esc(a.detail)}</td></tr>`).join("")}</table></div>`;
+  },
+};
+
+function go(view, arg) {
+  S.view = view;
+  if (arg !== undefined) S.arg = arg;
+  render();
+}
+
+async function act(path, body) {
+  try {
+    const s = await api(path, body === undefined ? { method: "POST" } : { body });
+    toast("Saved");
+    go("sub", s.id);
+  } catch (e) { toast(e.message); }
+}
+const accept = (sid, fid) => act(`/submissions/${sid}/findings/${fid}/accept`);
+const dispute = (sid, fid) => {
+  const note = prompt("Why is this finding wrong?");
+  if (note && note.trim()) act(`/submissions/${sid}/findings/${fid}/dispute`, { note });
+};
+const recheck = sid => act(`/submissions/${sid}/recheck`, { text: $("#re").value });
+const sendReview = sid => act(`/submissions/${sid}/submit`);
+const decide = (sid, action) => act(`/submissions/${sid}/decision`, { action, note: $("#note").value });
+
+async function submitCheck() {
+  try {
+    const s = await api("/submissions", { body: { title: $("#t").value, channel: $("#c").value, text: $("#x").value } });
+    go("sub", s.id);
+  } catch (e) { toast(e.message); }
+}
+
+async function uploadSource() {
+  const f = $("#sf").files[0];
+  if (!f) return toast("Choose a file first");
+  const fd = new FormData();
+  fd.append("title", $("#st").value || f.name);
+  fd.append("category", $("#sc").value);
+  fd.append("file", f);
+  try { await api("/sources", { body: fd }); toast("Source uploaded"); go("sources"); }
+  catch (e) { toast(e.message); }
+}
+
+async function scanGaps() {
+  try { const r = await api("/governance/gaps/run", { method: "POST" }); toast(`${r.created} new proposal(s)`); go("gaps"); }
+  catch (e) { toast(e.message); }
+}
+async function decideGap(id, action) {
+  try { await api(`/governance/gaps/${id}/decide`, { body: { action } }); toast("Decision recorded"); go("gaps"); }
+  catch (e) { toast(e.message); }
+}
+
+function renderLogin() {
+  $("#root").innerHTML = `<div class="login"><div class="card">
+    <div class="brand" style="color:var(--navy);font-size:22px">BrandProof</div>
+    <p class="muted" style="margin:4px 0 6px">AI brand governance. Every finding has evidence. Every change has a human.</p>
+    <label>Email</label><input id="em" value="manager@demo.brandproof">
+    <label>Password</label><input id="pw" type="password" value="demo-pass-123" onkeydown="if(event.key==='Enter')login()">
+    <div class="row"><button class="p" style="width:100%" onclick="login()">Sign in</button></div>
+    <p class="muted" style="font-size:12px;margin-top:18px">Demo accounts: manager, creator, reviewer or compliance @demo.brandproof. Password demo-pass-123.</p>
+    </div></div>`;
+}
+
+async function login() {
+  try {
+    const r = await api("/auth/login", { body: { email: $("#em").value, password: $("#pw").value } });
+    S.token = r.access_token;
+    sessionStorage.setItem("bp_token", S.token);
+    S.me = await api("/auth/me");
+    S.view = "";
+    render();
+  } catch (e) { toast(e.message); }
+}
+
+function logout() {
+  sessionStorage.removeItem("bp_token");
+  S.token = null; S.me = null;
+  render();
+}
+
+async function render() {
+  if (!S.me) return renderLogin();
+  const nav = NAV[S.me.role] || [];
+  if (S.view !== "sub" && !nav.some(([v]) => v === S.view)) S.view = nav[0][0];
+  $("#root").innerHTML = `<div class="app"><aside>
+    <div class="brand">BrandProof</div><div class="tagline">Evidence-backed brand checks</div>
+    <nav>${nav.map(([v, l]) => `<button class="${S.view === v ? "on" : ""}" onclick="go('${v}')">${l}</button>`).join("")}</nav>
+    <div class="who">${esc(S.me.email)}<br><button class="s" style="margin-top:8px" onclick="logout()">Sign out</button></div>
+    </aside><main id="main"></main></div>`;
+  try { await VIEWS[S.view](); }
+  catch (e) { M().innerHTML = `<div class="card err">${esc(e.message)}</div>`; }
+}
+
+(async () => {
+  if (S.token) {
+    try { S.me = await api("/auth/me"); }
+    catch { S.token = null; sessionStorage.removeItem("bp_token"); }
+  }
+  if (S.me) S.view = NAV[S.me.role][0][0];
+  render();
+})();
+</script>
+</body>
+</html>
